@@ -55,7 +55,10 @@ final class Sledge_Bundles_License_Manager
 
         if (!$result['valid']) {
             $this->store_invalid_state($result);
-            return new WP_Error('sledge_bundles_license_invalid', __('The license is invalid or cannot be activated for this domain.', 'sledge-bundles'));
+            return new WP_Error(
+                'sledge_bundles_license_invalid',
+                $this->message_for_status(isset($result['status']) ? $result['status'] : 'invalid')
+            );
         }
 
         $domain_error = $this->validate_response_claims($result);
@@ -86,7 +89,10 @@ final class Sledge_Bundles_License_Manager
 
         if (!$result['valid']) {
             $this->store_invalid_state($result);
-            return new WP_Error('sledge_bundles_license_invalid', __('The license server reported that this license is invalid.', 'sledge-bundles'));
+            return new WP_Error(
+                'sledge_bundles_license_invalid',
+                $this->message_for_status(isset($result['status']) ? $result['status'] : 'invalid')
+            );
         }
 
         $claim_error = $this->validate_response_claims($result);
@@ -294,6 +300,33 @@ final class Sledge_Bundles_License_Manager
         $state['last_checked'] = time();
         $state['last_error'] = sanitize_text_field($error->get_error_message());
         update_option(self::STATE_OPTION, $state, false);
+    }
+
+    /**
+     * Map license API status codes to admin-facing messages.
+     *
+     * @param string $status Server status (e.g. product_mismatch).
+     */
+    private function message_for_status($status)
+    {
+        $status = sanitize_key((string) $status);
+        $messages = array(
+            'product_mismatch'          => __('This license key is for a different product (plugin slug mismatch). Issue or assign a key with plugin slug “sledge-bundles”.', 'sledge-bundles'),
+            'activation_limit_reached'  => __('This license has reached its activation limit for other domains. Deactivate one first.', 'sledge-bundles'),
+            'domain_mismatch'           => __('This license is not activated for this domain.', 'sledge-bundles'),
+            'expired'                   => __('This license has expired.', 'sledge-bundles'),
+            'revoked'                   => __('This license has been revoked.', 'sledge-bundles'),
+            'suspended'                 => __('This license is suspended.', 'sledge-bundles'),
+            'invalid'                   => __('This license key was not found.', 'sledge-bundles'),
+            'version_not_allowed'       => __('This plugin version is not allowed for this license.', 'sledge-bundles'),
+            'rate_limited'              => __('Too many license requests. Try again shortly.', 'sledge-bundles'),
+        );
+
+        if (isset($messages[$status])) {
+            return $messages[$status];
+        }
+
+        return __('The license is invalid or cannot be activated for this domain.', 'sledge-bundles');
     }
 
     private function sanitize_key($license_key)
