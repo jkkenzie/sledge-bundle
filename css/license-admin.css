@@ -1,0 +1,19 @@
+.sledge-bundles-license .license-status {
+  display: inline-block;
+  margin: 12px 0 4px;
+  padding: 10px 16px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.sledge-bundles-license .license-status.valid {
+  background: #edfaef;
+  color: #1e7e34;
+  border: 1px solid #b8e0c0;
+}
+
+.sledge-bundles-license .license-status.invalid {
+  background: #fcf0f1;
+  color: #8a2424;
+  border: 1px solid #f1c0c3;
+}

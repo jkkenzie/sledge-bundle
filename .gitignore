@@ -1,0 +1,19 @@
+# Build / dependency output
+/node_modules/
+/dist/
+/dist-dev/
+
+# Local build configuration
+/.env
+/.env.*
+!/.env.example
+
+# Logs and OS junk
+*.log
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
