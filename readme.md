@@ -31,12 +31,73 @@ sledge-bundles/
 ├── includes/
 │   ├── class-sledge-bundles-license-*.php
 │   ├── class-wc-combo-*.php
+│   ├── class-wc-combo-product-templates.php  Theme override locator
 │   └── license-config.php  Dev stub (builds overwrite this)
 ├── templates/
+│   └── woocommerce/        Overridable single-product templates
 ├── scripts/                Node build tooling
 ├── sledge-bundles.php      Bootstrap
 └── dist/                   Build output (git-ignored)
 ```
+
+## Theme template overrides
+
+Combo single-product markup ships in the plugin and can be overridden by any
+theme or **child theme** (WordPress `locate_template()` walks the child first).
+
+### Lookup order
+
+For a template such as `content-single-product-combo.php`, the plugin loads the
+first file that exists:
+
+1. `{active-theme}/sledge-bundles/content-single-product-combo.php`
+2. `{active-theme}/woocommerce/content-single-product-combo.php`
+3. `plugins/sledge-bundles/templates/woocommerce/content-single-product-combo.php`
+
+The same order applies to partials under `single-product/`.
+
+### Templates you can override
+
+| Plugin file | Purpose |
+|-------------|---------|
+| `templates/woocommerce/content-single-product-combo.php` | Full combo single layout (gallery + items + tabs + related + sticky summary) |
+| `templates/woocommerce/single-product/combo-items.php` | Bundle line items list (qty / remove / subtotals) |
+
+### Example (child theme)
+
+```text
+your-child-theme/
+├── sledge-bundles/
+│   ├── content-single-product-combo.php   ← preferred plugin-specific path
+│   └── single-product/
+│       └── combo-items.php
+└── woocommerce/                           ← also supported (WooCommerce-style path)
+    ├── content-single-product-combo.php
+    └── single-product/
+        └── combo-items.php
+```
+
+Copy a file from the plugin `templates/woocommerce/` folder into one of those
+theme paths, then edit the copy. Leave the plugin file alone so updates do not
+overwrite your changes.
+
+PowerShell example:
+
+```powershell
+$theme = "E:\wamp\www\slegde\site\web\app\themes\retailgrid"
+$plugin = "E:\wamp\www\iYi\projects\sledge-bundles\templates\woocommerce"
+New-Item -ItemType Directory -Force "$theme\sledge-bundles\single-product" | Out-Null
+Copy-Item "$plugin\content-single-product-combo.php" "$theme\sledge-bundles\"
+Copy-Item "$plugin\single-product\combo-items.php" "$theme\sledge-bundles\single-product\"
+```
+
+### Notes
+
+- Overrides apply only to products with type **combo**. Simple / variable products keep the theme’s normal WooCommerce templates.
+- Prefer the `sledge-bundles/` folder in the theme so overrides stay separate from core WooCommerce template copies.
+- The floating / sticky `product-summary-side` is implemented **inside the plugin** (`assets/css/wc-combo-product.css` + `assets/js/wc-combo-product.js`). It measures the visible fixed header and sets `--sledge-combo-sticky-top` — no theme JS required.
+- CSS/JS for the combo layout still load from the plugin. Theme styles can override those selectors; you do not need to dequeue the plugin assets unless you replace them entirely.
+- After adding or changing theme overrides, clear any page / object cache and hard-refresh the product page.
 
 ## Build
 

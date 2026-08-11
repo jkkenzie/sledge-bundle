@@ -29,6 +29,7 @@ class WC_Combo_Product_Reservation
 
         // Register order status hooks like original
         $this->register_order_status_hooks();
+        $this->register_payment_gateway_hooks();
 
         add_action('wp_ajax_update_reservation_amounts', array($this, 'ajax_update_reservation_amounts'));
         add_action('wp_ajax_nopriv_update_reservation_amounts', array($this, 'ajax_update_reservation_amounts'));
@@ -401,109 +402,237 @@ class WC_Combo_Product_Reservation
         }
     }
 
+    /**
+     * Whether this order is a deposit-only reservation with an outstanding balance.
+     *
+     * @param WC_Order|false $order Order object.
+     * @return bool
+     */
+    private function is_reservation_with_balance_due($order)
+    {
+        if (!$order) {
+            return false;
+        }
+
+        if ($order->get_meta('_combo_admin_status_override') === 'yes') {
+            return false;
+        }
+
+        if ($order->get_meta('_is_balance_payment') === 'yes') {
+            return false;
+        }
+
+        if ($order->get_meta('_combo_is_reservation') !== 'yes') {
+            return false;
+        }
+
+        if ($order->get_meta('_combo_balance_paid') === 'yes') {
+            return false;
+        }
+
+        return floatval($order->get_meta('_combo_balance_amount')) > 0;
+    }
+
+    /**
+     * Whether the current request is a shop manager manually changing order status.
+     *
+     * @return bool
+     */
+    private function is_manual_order_status_change()
+    {
+        if (wp_doing_cron()) {
+            return false;
+        }
+
+        if (defined('WC_DOING_API') && WC_DOING_API) {
+            return false;
+        }
+
+        if (!empty($_GET['wc-api']) || !empty($_REQUEST['wc-api'])) {
+            return false;
+        }
+
+        if (!is_user_logged_in()) {
+            return false;
+        }
+
+        if (!current_user_can('edit_shop_orders') && !current_user_can('manage_woocommerce')) {
+            return false;
+        }
+
+        if (is_admin()) {
+            return true;
+        }
+
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            return true;
+        }
+
+        if (wp_doing_ajax()) {
+            $action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash($_REQUEST['action'])) : '';
+            $wc_ajax = isset($_REQUEST['wc-ajax']) ? sanitize_text_field(wp_unslash($_REQUEST['wc-ajax'])) : '';
+
+            if ($action === 'woocommerce_mark_order_status' || $wc_ajax === 'update_order_status') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Record that an admin intentionally bypassed the reservation on-hold rule.
+     *
+     * @param WC_Order $order     Order object.
+     * @param string   $to_status New status slug.
+     * @return void
+     */
+    private function record_admin_status_override($order, $to_status)
+    {
+        if ($order->get_meta('_combo_admin_status_override') === 'yes') {
+            return;
+        }
+
+        $order->update_meta_data('_combo_admin_status_override', 'yes');
+        $order->add_order_note(
+            sprintf(
+                __('Admin manually set order to %s. Reservation on-hold enforcement disabled for this order.', 'woocommerce-combo-product'),
+                wc_get_order_status_name($to_status)
+            ),
+            false
+        );
+        $order->save();
+    }
+
+    /**
+     * Keep reservation deposit orders on hold instead of processing/completed.
+     *
+     * @param WC_Order $order Order object.
+     * @return void
+     */
+    private function hold_reservation_order_after_deposit($order)
+    {
+        if (!$this->is_reservation_with_balance_due($order)) {
+            return;
+        }
+
+        $order_id = $order->get_id();
+        static $processing = array();
+
+        if (isset($processing[$order_id])) {
+            return;
+        }
+
+        $processing[$order_id] = true;
+
+        if (!in_array($order->get_status(), array('on-hold'), true)) {
+            $order->update_status(
+                'on-hold',
+                __('Deposit payment received - balance payment required before completion.', 'woocommerce-combo-product')
+            );
+        }
+
+        $this->add_deposit_received_note($order);
+
+        unset($processing[$order_id]);
+    }
+
+    /**
+     * @param WC_Order $order Order object.
+     * @return void
+     */
+    private function add_deposit_received_note($order)
+    {
+        if ($order->get_meta('_combo_deposit_note_added') === 'yes') {
+            return;
+        }
+
+        $balance = floatval($order->get_meta('_combo_balance_amount'));
+        $order->add_order_note(
+            sprintf(
+                __('Deposit payment successful. Balance of %s must be paid before order can be completed.', 'woocommerce-combo-product'),
+                wc_price($balance)
+            ),
+            false
+        );
+        $order->update_meta_data('_combo_deposit_note_added', 'yes');
+        $order->save();
+    }
+
+    /**
+     * Intercept WooCommerce and third-party gateway payment-complete flows.
+     */
+    public function register_payment_gateway_hooks()
+    {
+        add_filter('woocommerce_payment_complete_order_status', array($this, 'filter_payment_complete_order_status'), 20, 3);
+        add_action('woocommerce_payment_complete', array($this, 'handle_payment_complete'), 20, 1);
+    }
+
+    /**
+     * Force on-hold when a gateway completes payment for a partial reservation order.
+     *
+     * @param string   $status   Default post-payment status.
+     * @param int      $order_id Order ID.
+     * @param WC_Order $order    Order object.
+     * @return string
+     */
+    public function filter_payment_complete_order_status($status, $order_id, $order)
+    {
+        if (!$order) {
+            $order = wc_get_order($order_id);
+        }
+
+        if ($this->is_reservation_with_balance_due($order)) {
+            return 'on-hold';
+        }
+
+        return $status;
+    }
+
+    /**
+     * Backup handler for gateways that call payment_complete() but bypass the status filter.
+     *
+     * @param int $order_id Order ID.
+     * @return void
+     */
+    public function handle_payment_complete($order_id)
+    {
+        $order = wc_get_order($order_id);
+        $this->hold_reservation_order_after_deposit($order);
+    }
+
     public function register_order_status_hooks()
     {
-        add_action('woocommerce_order_status_changed', function ($order_id, $from_status, $to_status) {
-            // OPTIMIZED: Early return if not a status we care about
-            if (!in_array($to_status, ['processing', 'completed'])) {
-                return;
+        add_action('woocommerce_order_status_changed', array($this, 'handle_reservation_order_status_changed'), 20, 3);
+    }
+
+    /**
+     * Fallback for gateways that set processing/completed directly without payment_complete().
+     *
+     * @param int    $order_id    Order ID.
+     * @param string $from_status Previous status.
+     * @param string $to_status   New status.
+     * @return void
+     */
+    public function handle_reservation_order_status_changed($order_id, $from_status, $to_status)
+    {
+        if (!in_array($to_status, array('processing', 'completed'), true)) {
+            return;
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            return;
+        }
+
+        if ($this->is_manual_order_status_change()) {
+            if ($order->get_meta('_combo_is_reservation') === 'yes' && $this->is_reservation_with_balance_due($order)) {
+                $this->record_admin_status_override($order, $to_status);
             }
+            return;
+        }
 
-            $order = wc_get_order($order_id);
-            if (!$order) {
-                return;
-            }
-
-            // OPTIMIZED: Check meta early to avoid unnecessary processing
-            $is_reservation = $order->get_meta('_combo_is_reservation');
-            if ($is_reservation !== 'yes') {
-                return;
-            }
-
-            // If order becomes processing/completed after payment and there's still a balance
-            if ($order->get_meta('_combo_balance_paid') !== 'yes') {
-                $balance = floatval($order->get_meta('_combo_balance_amount'));
-                if ($balance > 0) {
-                    // OPTIMIZED: Use static flag to prevent infinite loops instead of remove/add action
-                    static $processing = array();
-                    if (isset($processing[$order_id])) {
-                        return;
-                    }
-                    $processing[$order_id] = true;
-
-                    // OPTIMIZED: Defer status change if we're in payment completion flow to avoid blocking redirect
-                    // Check if we're currently processing payment completion
-                    if (doing_action('woocommerce_payment_complete') || doing_action('woocommerce_order_status_changed')) {
-                        // Schedule status change to run after redirect (2 seconds delay)
-                        if (!wp_next_scheduled('wc_combo_defer_reservation_status_change', array($order_id))) {
-                            wp_schedule_single_event(time() + 2, 'wc_combo_defer_reservation_status_change', array($order_id));
-                        }
-                        unset($processing[$order_id]);
-                        return;
-                    }
-
-                    // Set to on-hold status since balance is still due (for manual changes)
-                    $order->update_status('on-hold', __('Deposit payment received - balance payment required before completion.', 'woocommerce-combo-product'));
-
-                    // Add admin note
-                    $order->add_order_note(
-                        sprintf(__('Deposit payment successful. Balance of %s must be paid before order can be completed.', 'woocommerce-combo-product'), wc_price($balance)),
-                        false
-                    );
-
-                    unset($processing[$order_id]);
-                }
-            }
-
-            // If order is manually changed to completed, mark balance as paid
-            elseif ($to_status === 'completed' && $order->get_meta('_combo_balance_paid') !== 'yes') {
-                $balance = $order->get_meta('_combo_balance_amount');
-                if ($balance > 0) {
-                    // Mark balance as paid since order is being completed manually
-                    $order->update_meta_data('_combo_balance_paid', 'yes');
-                    $order->update_meta_data('_combo_balance_paid_date', current_time('mysql'));
-                    $order->update_meta_data('_combo_balance_payment_method', 'manual_cash');
-                    $order->save();
-
-                    $order->add_order_note(
-                        __('Balance payment received via cash/manual payment. Order marked as completed.', 'woocommerce-combo-product'),
-                        false
-                    );
-                }
-            }
-        }, 10, 3);
-
-        // Handle deferred status change (runs after redirect to avoid blocking)
-        add_action('wc_combo_defer_reservation_status_change', function ($order_id) {
-            $order = wc_get_order($order_id);
-            if (!$order) {
-                return;
-            }
-
-            // Double-check conditions
-            if ($order->get_meta('_combo_is_reservation') !== 'yes') {
-                return;
-            }
-
-            if ($order->get_meta('_combo_balance_paid') === 'yes') {
-                return;
-            }
-
-            $balance = floatval($order->get_meta('_combo_balance_amount'));
-            $current_status = $order->get_status();
-            
-            // Only change status if it's still processing/completed
-            if ($balance > 0 && in_array($current_status, ['processing', 'completed'])) {
-                // Set to on-hold status since balance is still due
-                $order->update_status('on-hold', __('Deposit payment received - balance payment required before completion.', 'woocommerce-combo-product'));
-
-                // Add admin note
-                $order->add_order_note(
-                    sprintf(__('Deposit payment successful. Balance of %s must be paid before order can be completed.', 'woocommerce-combo-product'), wc_price($balance)),
-                    false
-                );
-            }
-        });
+        $this->hold_reservation_order_after_deposit($order);
     }
 
     private function get_cart_total_with_shipping()

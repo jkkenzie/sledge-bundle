@@ -1,0 +1,171 @@
+.wc-combo-payment-callbacks-wrap .wc-combo-pcb-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0;
+}
+
+.wc-combo-payment-callbacks-wrap .wc-combo-pcb-toolbar label {
+    font-weight: 600;
+}
+
+.wc-combo-payment-callbacks-wrap .wc-combo-pcb-toolbar input[type="date"] {
+    min-height: 30px;
+}
+
+.wc-combo-payment-callbacks-wrap .wc-combo-pcb-toolbar input[type="search"] {
+    min-width: 260px;
+}
+
+.wc-combo-pcb-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 16px 0 24px;
+}
+
+.wc-combo-pcb-stat-card {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 16px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.wc-combo-pcb-stat-card .label {
+    display: block;
+    color: #646970;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+}
+
+.wc-combo-pcb-stat-card .value {
+    font-size: 24px;
+    line-height: 1.2;
+    color: #1d2327;
+}
+
+.wc-combo-pcb-tabs {
+    margin-bottom: 0;
+}
+
+.wc-combo-pcb-table-wrap {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-top: none;
+    overflow-x: auto;
+}
+
+.wc-combo-pcb-table {
+    margin: 0;
+    min-width: 100%;
+}
+
+.wc-combo-pcb-table th,
+.wc-combo-pcb-table td {
+    vertical-align: top;
+    white-space: nowrap;
+}
+
+.wc-combo-pcb-table td.field-cell {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wc-combo-pcb-table td.actions-cell {
+    white-space: nowrap;
+}
+
+.wc-combo-pcb-table .verify-result {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #2271b1;
+}
+
+.wc-combo-pcb-table .verify-result.is-error {
+    color: #b32d2e;
+}
+
+.wc-combo-pcb-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+}
+
+.wc-combo-pcb-pagination .page-info {
+    color: #646970;
+}
+
+.wc-combo-pcb-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.wc-combo-pcb-bulk-panel {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0 24px;
+}
+
+.wc-combo-pcb-bulk-panel h2 {
+    margin-top: 0;
+}
+
+.wc-combo-pcb-bulk-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.wc-combo-pcb-bulk-controls label {
+    font-weight: 600;
+}
+
+.wc-combo-pcb-bulk-progress {
+    margin-top: 16px;
+}
+
+.wc-combo-pcb-bulk-progress-bar {
+    width: 100%;
+    height: 10px;
+    background: #f0f0f1;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.wc-combo-pcb-bulk-progress-bar span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: #2271b1;
+    transition: width 0.2s ease;
+}
+
+.wc-combo-pcb-bulk-results {
+    max-height: 180px;
+    overflow-y: auto;
+    margin: 12px 0 0;
+    padding-left: 18px;
+}
+
+.wc-combo-pcb-bulk-results .is-success {
+    color: #1d6f42;
+}
+
+.wc-combo-pcb-bulk-results .is-skipped {
+    color: #646970;
+}
+
+.wc-combo-pcb-bulk-results .is-error {
+    color: #b32d2e;
+}

@@ -145,8 +145,12 @@
         },
         success: (response) => {
           if (response.success && response.data) {
+            const editingId = getEditingProductId()
             let options = '<option value="">Select a product</option>'
             $.each(response.data, (id, name) => {
+              if (editingId && String(id) === editingId) {
+                return
+              }
               options += '<option value="' + id + '">' + name + "</option>"
             })
             $productSelect.prop("disabled", false).html(options)
@@ -203,6 +207,14 @@
       addComboProduct("#combo_category_product_select")
     })
 
+    function getEditingProductId() {
+      if (window.wc_combo_admin && window.wc_combo_admin.productId) {
+        return String(window.wc_combo_admin.productId)
+      }
+      const fromInput = $("#post_ID").val()
+      return fromInput ? String(fromInput) : ""
+    }
+
     // Common function to add combo product
     function addComboProduct(selectId) {
       const index = $("#combo_product_fields .combo_product_field").length
@@ -211,6 +223,12 @@
 
       if (!product_id) {
         alert("Please select a product")
+        return
+      }
+
+      const editingId = getEditingProductId()
+      if (editingId && String(product_id) === editingId) {
+        alert("You cannot add this product to its own combo.")
         return
       }
 
@@ -255,6 +273,7 @@
     // Remove combo product field
     $(document).on("click", ".remove_combo_product", function (e) {
       e.preventDefault()
+      e.stopPropagation()
 
       if (confirm("Are you sure you want to remove this product from the combo?")) {
         $(this).closest(".combo_product_field").remove()

@@ -177,14 +177,26 @@ class WC_Combo_Product_Admin
     {
         if (isset($_POST['combo_products'])) {
             $combo_products = array();
+            $seen_ids = array();
+            $post_id = absint($post_id);
+
             foreach ($_POST['combo_products'] as $combo_product) {
-                if (!empty($combo_product['product_id'])) {
-                    $combo_products[] = array(
-                        'product_id' => sanitize_text_field($combo_product['product_id']),
-                        'quantity' => intval($combo_product['quantity']),
-                        'optional' => isset($combo_product['optional']) ? 1 : 0,
-                    );
+                if (empty($combo_product['product_id'])) {
+                    continue;
                 }
+
+                $item_id = absint($combo_product['product_id']);
+                // Do not allow a combo to include itself, and skip duplicate rows.
+                if (!$item_id || $item_id === $post_id || isset($seen_ids[$item_id])) {
+                    continue;
+                }
+
+                $seen_ids[$item_id] = true;
+                $combo_products[] = array(
+                    'product_id' => $item_id,
+                    'quantity' => intval($combo_product['quantity']),
+                    'optional' => isset($combo_product['optional']) ? 1 : 0,
+                );
             }
             update_post_meta($post_id, '_combo_products', $combo_products);
         }
@@ -218,7 +230,11 @@ class WC_Combo_Product_Admin
                                     <option value=""><?php _e('Select a product', 'woocommerce-combo-product'); ?></option>
                                     <?php
                                     $products = $this->get_all_products();
+                                    $editing_id = absint($post->ID);
                                     foreach ($products as $id => $title) {
+                                        if ($editing_id && absint($id) === $editing_id) {
+                                            continue;
+                                        }
                                         echo '<option value="' . esc_attr($id) . '">' . esc_html($title) . '</option>';
                                     }
                                     ?>
@@ -226,7 +242,7 @@ class WC_Combo_Product_Admin
                             </div>
                         </div>
                         <div class="col-md-2">
-                            <button type="button" id="add_combo_product_button" class="btn btn-primary btn-sm"><?php _e('Add Product', 'woocommerce-combo-product'); ?></button>
+                            <button type="button" id="add_combo_product_button" class="button button-primary"><?php _e('Add Product', 'woocommerce-combo-product'); ?></button>
                         </div>
                     </div>
                 </div>
@@ -235,29 +251,24 @@ class WC_Combo_Product_Admin
                 <script type="text/template" id="new-product-template">
                     <div class="combo_product_field" data-index="${index}">
                         <h3>
-                            <strong>
-                                <span>${product_id}: ${product_title}</span>
-                            </strong>
+                            <span class="combo-field-id">${product_id}</span>
+                            <span class="combo-field-title">${product_title}</span>
                             <button type="button" class="button remove_combo_product"><?php _e('Remove', 'woocommerce-combo-product'); ?></button>
                             <input type="hidden" value="${product_id}" name="combo_products[${index}][product_id]">
                         </h3>
-                        <div class="ui-accordion ui-widget ui-helper-reset ui-sortable">
-                            <div class="form-group">
-                                <label class="combo-product-labelfld" for="combo_item_quantity-${index}"><?php _e('Default Quantity', 'woocommerce-combo-product'); ?></label>
-                                <input type="number" id="combo_item_quantity-${index}" name="combo_products[${index}][quantity]" value="1" min="1" class="form-control" />
-                                <span class="woocommerce-help-tip" tabindex="0" aria-label="This is the quantity of items the customer would see already set"></span>
+                        <div>
+                            <div class="combo-field-row">
+                                <label for="combo_item_quantity-${index}"><?php _e('Default Quantity', 'woocommerce-combo-product'); ?></label>
+                                <input type="number" id="combo_item_quantity-${index}" name="combo_products[${index}][quantity]" value="1" min="1" />
+                                <span class="woocommerce-help-tip" tabindex="0" aria-label="<?php esc_attr_e('Quantity the customer will see pre-selected', 'woocommerce-combo-product'); ?>"></span>
                             </div>
-                            <div class="form-group">
-                                <label class="combo-product-labelfld" for="combo_products_optional-${index}">                        
-                                    <?php _e('Optional Item (can be removed by customer)', 'woocommerce-combo-product'); ?>
-                                </label>
-                                <input type="checkbox" id="combo_products_optional-${index}" name="combo_products[${index}][optional]" value="1" checked="" />
-                                <span class="woocommerce-help-tip" tabindex="0" aria-label="When checked, the customer can remove it from their cart"></span>
+                            <div class="combo-field-row combo-field-row--optional">
+                                <input type="checkbox" id="combo_products_optional-${index}" name="combo_products[${index}][optional]" value="1" checked="checked" />
+                                <label for="combo_products_optional-${index}"><?php _e('Optional item (customer can remove)', 'woocommerce-combo-product'); ?></label>
+                                <span class="woocommerce-help-tip" tabindex="0" aria-label="<?php esc_attr_e('When checked, the customer can remove this item from the bundle', 'woocommerce-combo-product'); ?>"></span>
                             </div>
                         </div>
                     </div>
-
-        
                 </script>
             </div>
         </div>
@@ -266,15 +277,25 @@ class WC_Combo_Product_Admin
 
     private function get_all_products()
     {
+        global $post;
+
         $products = array();
+        $exclude_id = isset($post->ID) ? absint($post->ID) : 0;
         $args = array(
             'post_type' => 'product',
             'posts_per_page' => -1,
-            'post_status' => 'publish'
+            'post_status' => 'publish',
         );
+
+        if ($exclude_id) {
+            $args['post__not_in'] = array($exclude_id);
+        }
 
         $product_posts = get_posts($args);
         foreach ($product_posts as $product_post) {
+            if ($exclude_id && absint($product_post->ID) === $exclude_id) {
+                continue;
+            }
             $product = wc_get_product($product_post->ID);
             if ($product && $product->get_type() !== 'combo') {
                 $products[$product_post->ID] = $product_post->post_title;
@@ -306,24 +327,21 @@ class WC_Combo_Product_Admin
     ?>
         <div class="combo_product_field" data-index="<?php echo esc_attr($index); ?>">
             <h3>
-                <strong>
-                    <span><?php echo $product_id . ': ' . esc_html($product->get_name()); ?></span>
-                </strong>
+                <span class="combo-field-id"><?php echo esc_html((string) $product_id); ?></span>
+                <span class="combo-field-title"><?php echo esc_html($product->get_name()); ?></span>
                 <button type="button" class="button remove_combo_product"><?php _e('Remove', 'woocommerce-combo-product'); ?></button>
-                <input type="hidden" value="<?php echo $product_id; ?>" name="combo_products[<?php echo esc_attr($index); ?>][product_id]">
+                <input type="hidden" value="<?php echo esc_attr($product_id); ?>" name="combo_products[<?php echo esc_attr($index); ?>][product_id]">
             </h3>
-            <div class="ui-accordion ui-widget ui-helper-reset ui-sortable">
-                <div class="form-group">
-                    <label class="combo-product-labelfld" for="combo_item_quantity-<?php echo esc_attr($index); ?>"><?php _e('Default Quantity', 'woocommerce-combo-product'); ?></label>
-                    <input type="number" id="combo_item_quantity-<?php echo esc_attr($index); ?>" name="combo_products[<?php echo esc_attr($index); ?>][quantity]" value="<?php echo esc_attr($quantity); ?>" min="1" class="form-control" />
-                    <span class="woocommerce-help-tip" tabindex="0" aria-label="This is the quantity of items the customer would see already set"></span>
+            <div>
+                <div class="combo-field-row">
+                    <label for="combo_item_quantity-<?php echo esc_attr($index); ?>"><?php _e('Default Quantity', 'woocommerce-combo-product'); ?></label>
+                    <input type="number" id="combo_item_quantity-<?php echo esc_attr($index); ?>" name="combo_products[<?php echo esc_attr($index); ?>][quantity]" value="<?php echo esc_attr($quantity); ?>" min="1" />
+                    <span class="woocommerce-help-tip" tabindex="0" aria-label="<?php esc_attr_e('Quantity the customer will see pre-selected', 'woocommerce-combo-product'); ?>"></span>
                 </div>
-                <div class="form-group">
-                    <label class="combo-product-labelfld" for="combo_products_optional-<?php echo esc_attr($index); ?>">
-                        <?php _e('Optional Item (can be removed by customer)', 'woocommerce-combo-product'); ?>
-                    </label>
+                <div class="combo-field-row combo-field-row--optional">
                     <input type="checkbox" id="combo_products_optional-<?php echo esc_attr($index); ?>" name="combo_products[<?php echo esc_attr($index); ?>][optional]" value="1" <?php checked($is_optional, 1); ?> />
-                    <span class="woocommerce-help-tip" tabindex="0" aria-label="When checked, the customer can remove it from their cart"></span>
+                    <label for="combo_products_optional-<?php echo esc_attr($index); ?>"><?php _e('Optional item (customer can remove)', 'woocommerce-combo-product'); ?></label>
+                    <span class="woocommerce-help-tip" tabindex="0" aria-label="<?php esc_attr_e('When checked, the customer can remove this item from the bundle', 'woocommerce-combo-product'); ?>"></span>
                 </div>
             </div>
         </div>

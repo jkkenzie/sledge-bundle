@@ -40,9 +40,27 @@ Same feature set as free for now, but requires a valid license key under
 
 No. Free and development editions stay unlocked until a feature split ships.
 
+= How do I override the combo single product template in my theme? =
+
+Copy a template from `plugins/sledge-bundles/templates/woocommerce/` into your
+theme (child themes work). Lookup order:
+
+1. `yourtheme/sledge-bundles/{template}`
+2. `yourtheme/woocommerce/{template}`
+3. Plugin default
+
+Main templates:
+
+* `content-single-product-combo.php` — full combo product layout
+* `single-product/combo-items.php` — bundle items list
+
+Example: copy to `yourtheme/sledge-bundles/content-single-product-combo.php`,
+then edit the theme copy. See the project README for a full walkthrough.
+
 == Changelog ==
 
 = 1.0.0 =
 * Standalone project with production builds (dist, minify, ZIP).
 * Signed licensing client (same system as iYi Elements).
 * Free / premium / development editions (features not split yet).
+* Combo single-product layout with theme-overridable templates.

@@ -44,8 +44,7 @@ class WC_Combo_Product_Orders
         add_action('wp_ajax_combo_mark_balance_paid', array($this, 'handle_ajax_mark_balance_paid'));
 
 
-        // Add this line instead:
-        add_action('admin_footer-post.php', array($this, 'add_reservation_admin_prevention'));
+        // Reservation admin totals are handled by WC_Combo_Order_Display_Manager.
 
         // Customize order confirmation message
         add_filter('woocommerce_thankyou_order_received_text', array($this, 'customize_order_confirmation_message'), 10, 2);
@@ -268,7 +267,6 @@ class WC_Combo_Product_Orders
     public function register_order_status_hooks()
     {
         add_action('woocommerce_order_status_changed', function ($order_id, $from_status, $to_status) {
-            // OPTIMIZED: Early return if not a status we care about
             if ($to_status !== 'completed') {
                 return;
             }
@@ -278,42 +276,11 @@ class WC_Combo_Product_Orders
                 return;
             }
 
-            // Handle balance payment completion
-            if ($order->get_meta('_is_balance_payment') === 'yes') {
-                $this->handle_balance_payment_completion($order_id);
+            if ($order->get_meta('_is_balance_payment') !== 'yes') {
                 return;
             }
 
-            // Handle original reservation orders
-            // OPTIMIZED: Check meta early to avoid unnecessary processing
-            $is_reservation = $order->get_meta('_combo_is_reservation');
-            if ($is_reservation !== 'yes') {
-                return;
-            }
-
-            // If order is being changed to completed but balance is not paid, revert to on-hold
-            if ($order->get_meta('_combo_balance_paid') !== 'yes') {
-                $balance = $order->get_meta('_combo_balance_amount');
-                if ($balance > 0) {
-                    // OPTIMIZED: Use static flag to prevent infinite loops instead of remove/add action
-                    static $processing = array();
-                    if (isset($processing[$order_id])) {
-                        return;
-                    }
-                    $processing[$order_id] = true;
-
-                    // Revert to on-hold status
-                    $order->update_status('on-hold', __('Order reverted to on-hold - balance payment required before completion.', 'woocommerce-combo-product'));
-
-                    // Add admin note about the reversion
-                    $order->add_order_note(
-                        sprintf(__('Automatic completion prevented. Balance of %s must be paid before order can be completed.', 'woocommerce-combo-product'), wc_price($balance)),
-                        false
-                    );
-
-                    unset($processing[$order_id]);
-                }
-            }
+            $this->handle_balance_payment_completion($order_id);
         }, 10, 3);
     }
 
@@ -1374,17 +1341,236 @@ class WC_Combo_Order_Display_Manager
     {
         // Hook into WooCommerce order display system
         add_filter('woocommerce_get_order_item_totals', array($this, 'modify_order_totals_display'), 1000, 3);
-        add_action('woocommerce_admin_order_totals_after_total', array($this, 'inject_reservation_totals'), 10, 1);
+        add_action('woocommerce_admin_order_totals_after_tax', array($this, 'inject_reservation_totals'), 10, 1);
 
         // Hook into the core order total methods
         add_filter('woocommerce_order_formatted_line_subtotal', array($this, 'modify_line_subtotal_display'), 10, 3);
 
-        // Override the admin order details display
-        add_action('admin_print_styles-post.php', array($this, 'add_admin_order_styles'));
-        add_action('admin_footer-post.php', array($this, 'add_admin_order_scripts'));
+        add_filter('admin_body_class', array($this, 'add_reservation_admin_body_class'));
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_order_assets'));
 
         // Filter the order total display in various contexts
         add_filter('woocommerce_order_get_formatted_order_total', array($this, 'get_formatted_reservation_total'), 10, 2);
+    }
+
+    /**
+     * @return bool
+     */
+    private function is_order_edit_screen()
+    {
+        if (!is_admin()) {
+            return false;
+        }
+
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        if (!$screen) {
+            return false;
+        }
+
+        if ($screen->id === 'shop_order') {
+            return true;
+        }
+
+        if (function_exists('wc_get_page_screen_id') && $screen->id === wc_get_page_screen_id('shop-order')) {
+            return isset($_GET['action']) && sanitize_text_field(wp_unslash($_GET['action'])) === 'edit';
+        }
+
+        return false;
+    }
+
+    /**
+     * @return WC_Order|false
+     */
+    private function get_current_admin_order()
+    {
+        if (isset($_GET['id'])) {
+            return wc_get_order(absint(wp_unslash($_GET['id'])));
+        }
+
+        if (isset($_GET['post'])) {
+            return wc_get_order(absint(wp_unslash($_GET['post'])));
+        }
+
+        global $post;
+        if ($post && isset($post->ID) && get_post_type($post->ID) === 'shop_order') {
+            return wc_get_order($post->ID);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param string $classes Admin body classes.
+     * @return string
+     */
+    public function add_reservation_admin_body_class($classes)
+    {
+        if (!$this->is_order_edit_screen()) {
+            return $classes;
+        }
+
+        $order = $this->get_current_admin_order();
+        if ($order && $this->should_show_reservation_admin_totals($order)) {
+            $classes .= ' reservation-order';
+        }
+
+        return $classes;
+    }
+
+    /**
+     * @param string $hook_suffix Current admin page hook suffix.
+     * @return void
+     */
+    public function enqueue_admin_order_assets($hook_suffix)
+    {
+        if (!$this->is_order_edit_screen()) {
+            return;
+        }
+
+        $order = $this->get_current_admin_order();
+        if (!$order || !$this->should_show_reservation_admin_totals($order)) {
+            return;
+        }
+
+        wp_register_style('wc-combo-reservation-admin-order', false);
+        wp_enqueue_style('wc-combo-reservation-admin-order');
+        wp_add_inline_style('wc-combo-reservation-admin-order', $this->get_reservation_admin_order_css());
+
+        wp_register_script('wc-combo-reservation-admin-order', false, array('jquery'), WC_COMBO_VERSION, true);
+        wp_enqueue_script('wc-combo-reservation-admin-order');
+        wp_add_inline_script(
+            'wc-combo-reservation-admin-order',
+            $this->get_reservation_admin_order_js(),
+            'after'
+        );
+    }
+
+    /**
+     * @param WC_Order|false $order Order object.
+     * @return bool
+     */
+    private function should_show_reservation_admin_totals($order)
+    {
+        if (!$order || $order->get_meta('_combo_is_reservation') !== 'yes') {
+            return false;
+        }
+
+        $original_total = floatval($order->get_meta('_combo_original_total'));
+        $balance_amount = floatval($order->get_meta('_combo_balance_amount'));
+
+        return $original_total > 0 && $balance_amount > 0;
+    }
+
+    /**
+     * @return string
+     */
+    private function get_reservation_admin_order_css()
+    {
+        return '
+            body.reservation-order .wc-order-totals-items .wc-used-coupons {
+                display: none !important;
+            }
+
+            body.reservation-order .wc-order-totals-items table.wc-order-totals:first-of-type tr:not(.combo-reservation-total-row) {
+                display: none !important;
+            }
+
+            body.reservation-order .wc-order-totals-items > table.wc-order-totals:last-of-type:not(:has(.combo-reservation-total-row)) {
+                display: none !important;
+            }
+
+            body.reservation-order .wc-order-totals-items table.combo-reservation-totals-table,
+            body.reservation-order .wc-order-totals-items table.wc-order-totals:first-of-type:has(.combo-reservation-total-row) {
+                width: 100%;
+                margin-top: 0;
+            }
+
+            body.reservation-order .combo-reservation-notice-row td {
+                padding: 10px 12px;
+            }
+
+            body.reservation-order .reservation-recalc-warning {
+                background: #fff3cd;
+                border: 1px solid #ffeaa7;
+                border-left: 4px solid #f39c12;
+                padding: 10px 15px;
+                border-radius: 4px;
+                color: #856404;
+            }
+
+            body.reservation-order .reservation-recalc-warning p {
+                margin: 0;
+            }
+
+            body.reservation-order .calculate-action {
+                display: none !important;
+            }
+
+            body.reservation-order .wc-order-totals-items table.combo-reservation-totals-table .balance-amount.unpaid,
+            body.reservation-order .wc-order-totals-items > table.wc-order-totals:first-of-type .balance-amount.unpaid {
+                color: #d63638;
+                font-weight: 600;
+            }
+
+            body.reservation-order .wc-order-totals-items table.combo-reservation-totals-table .balance-amount.paid,
+            body.reservation-order .wc-order-totals-items table.combo-reservation-totals-table .paid-amount,
+            body.reservation-order .wc-order-totals-items > table.wc-order-totals:first-of-type .balance-amount.paid,
+            body.reservation-order .wc-order-totals-items > table.wc-order-totals:first-of-type .paid-amount {
+                color: #00a32a;
+                font-weight: 600;
+            }
+
+            body.reservation-order .wc-order-totals-items table.combo-reservation-totals-table .deposit-row td,
+            body.reservation-order .wc-order-totals-items > table.wc-order-totals:first-of-type .deposit-row td {
+                background: #e3f2fd;
+                border-bottom: 2px solid #2196f3;
+            }
+        ';
+    }
+
+    /**
+     * @return string
+     */
+    private function get_reservation_admin_order_js()
+    {
+        $warning = esc_js(__('Warning: This reservation order still has an unpaid balance. Consider updating the balance status first.', 'woocommerce-combo-product'));
+
+        return "jQuery(function($) {
+            function wcComboApplyReservationTotalsDisplay() {
+                if (!$('body').hasClass('reservation-order')) {
+                    return;
+                }
+
+                $('.wc-order-totals-items .wc-used-coupons').hide();
+
+                var \$table = $('.wc-order-totals-items table.wc-order-totals').first();
+                if (!\$table.find('.combo-reservation-total-row').length) {
+                    return;
+                }
+
+                \$table.addClass('combo-reservation-totals-table');
+                \$table.find('tr').not('.combo-reservation-total-row').hide();
+            }
+
+            wcComboApplyReservationTotalsDisplay();
+            $(document.body).on('wc_order_items_reloaded', wcComboApplyReservationTotalsDisplay);
+
+            $('.calculate-action').hide().prop('disabled', true);
+
+            $(document).on('click', '.calculate-action', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                alert('" . esc_js(__('Recalculation is disabled for reservation orders to preserve accurate deposit and balance amounts.', 'woocommerce-combo-product')) . "');
+                return false;
+            });
+
+            $(document).on('change', 'select[name=\"_order_status\"], #order_status', function() {
+                var status = $(this).val();
+                if (status === 'completed' && $('.balance-amount.unpaid').length > 0) {
+                    alert('{$warning}');
+                }
+            });
+        });";
     }
 
     /**
@@ -1462,208 +1648,86 @@ class WC_Combo_Order_Display_Manager
     }
 
     /**
-     * Inject custom HTML after the standard totals section
+     * Inject reservation breakdown rows into the main admin order totals table.
      */
     public function inject_reservation_totals($order_id)
     {
         $order = wc_get_order($order_id);
 
-        if (!$order || $order->get_meta('_combo_is_reservation') !== 'yes') {
+        if (!$this->should_show_reservation_admin_totals($order)) {
             return;
         }
 
+        $this->render_reservation_admin_total_rows($order);
+    }
+
+    /**
+     * @param WC_Order $order Order object.
+     * @return void
+     */
+    private function render_reservation_admin_total_rows($order)
+    {
         $original_total = floatval($order->get_meta('_combo_original_total'));
         $deposit_amount = floatval($order->get_meta('_combo_deposit_amount'));
         $balance_amount = floatval($order->get_meta('_combo_balance_amount'));
         $balance_paid = $order->get_meta('_combo_balance_paid') === 'yes';
+        $shipping_total = floatval($order->get_shipping_total()) + floatval($order->get_shipping_tax());
+        $items_subtotal = $original_total - $shipping_total;
 
-        if (!$original_total || !$balance_amount) {
-            return;
-        }
-
-        // Hide the original totals and replace with our custom display
-    ?>
-        <div id="reservation-totals-replacement" class="reservation-totals-container">
-            <h3><?php _e('Reservation Order Summary', 'woocommerce-combo-product'); ?></h3>
-            <table class="wc-order-totals">
-                <tr>
-                    <td class="label"><?php _e('Items Subtotal:', 'woocommerce'); ?></td>
-                    <td class="total"><?php echo wc_price($original_total - $order->get_shipping_total() - $order->get_shipping_tax()); ?></td>
-                </tr>
-                <tr class="balance-row">
-                    <td class="label">
-                        <?php echo $balance_paid ? __('Balance (paid):', 'woocommerce-combo-product') : __('Balance due:', 'woocommerce-combo-product'); ?>
-                    </td>
-                    <td class="total balance-amount <?php echo $balance_paid ? 'paid' : 'unpaid'; ?>">
-                        -<?php echo wc_price($balance_amount); ?>
-                    </td>
-                </tr>
-                <?php if ($order->get_shipping_total() > 0): ?>
-                    <tr>
-                        <td class="label"><?php _e('Shipping:', 'woocommerce'); ?></td>
-                        <td class="total"><?php echo wc_price($order->get_shipping_total() + $order->get_shipping_tax()); ?></td>
-                    </tr>
-                <?php endif; ?>
-                <tr class="deposit-row">
-                    <td class="label"><strong><?php _e('Order Deposit:', 'woocommerce-combo-product'); ?></strong></td>
-                    <td class="total"><strong><?php echo wc_price($deposit_amount); ?></strong></td>
-                </tr>
-                <?php if ($balance_paid): ?>
-                    <tr class="order-total-row">
-                        <td class="label"><strong><?php _e('Order Total:', 'woocommerce'); ?></strong></td>
-                        <td class="total"><strong><?php echo wc_price($original_total); ?></strong></td>
-                    </tr>
-                    <tr class="paid-row">
-                        <td class="label"><strong><?php _e('Paid:', 'woocommerce-combo-product'); ?></strong></td>
-                        <td class="total paid-amount"><strong><?php echo wc_price($original_total); ?></strong></td>
-                    </tr>
-                <?php endif; ?>
-            </table>
-        </div>
-        <?php
-    }
-
-    /**
-     * Add custom CSS for reservation order display
-     */
-    public function add_admin_order_styles()
-    {
-        $screen = get_current_screen();
-        if ($screen && $screen->id === 'shop_order') {
         ?>
-            <style type="text/css">
-                /* Hide original totals for reservation orders */
-                .reservation-order .wc-order-totals-items .wc-order-totals:not(.reservation-totals-container .wc-order-totals) {
-                    display: none !important;
-                }
-
-                /* Style our custom totals */
-                #reservation-totals-replacement>h3 {
-                    display: none;
-                }
-
-                .reservation-totals-container h3 {
-                    display: none;
-                }
-
-                .reservation-totals-container .wc-order-totals {
-                    width: 100%;
-                    border-collapse: collapse;
-                }
-
-                .reservation-totals-container .wc-order-totals td {
-                    padding: 8px 12px;
-                    border-bottom: 1px solid #e9ecef;
-                    vertical-align: top;
-                }
-
-                .reservation-totals-container .wc-order-totals .label {
-                    font-weight: 500;
-                    color: #495057;
-                    width: 60%;
-                }
-
-                .reservation-totals-container .wc-order-totals .total {
-                    text-align: right;
-                    font-weight: 500;
-                    width: 40%;
-                }
-
-                /* Balance row styling */
-                .balance-row .balance-amount.unpaid {
-                    color: #dc3545 !important;
-                    font-weight: 600;
-                }
-
-                .balance-row .balance-amount.paid {
-                    color: #28a745 !important;
-                    font-weight: 600;
-                }
-
-                /* Deposit row styling */
-                .deposit-row {
-                    background: #e3f2fd;
-                }
-
-                .deposit-row td {
-                    border-bottom: 2px solid #2196f3 !important;
-                }
-
-                /* Order total and paid styling */
-                .order-total-row {
-                    background: #f3e5f5;
-                }
-
-                .paid-row .paid-amount {
-                    color: #28a745 !important;
-                    font-weight: bold !important;
-                    font-size: 1.1em;
-                }
-
-                /* Add visual indicators */
-                .balance-row .label::before {
-                    content: "⚠ ";
-                    color: #ffc107;
-                }
-
-                .balance-row.paid .label::before {
-                    content: "✓ ";
-                    color: #28a745;
-                }
-
-                .paid-row .label::before {
-                    content: "✓ ";
-                    color: #28a745;
-                }
-            </style>
+        <tr class="combo-reservation-total-row combo-reservation-notice-row">
+            <td class="label" colspan="3">
+                <div class="reservation-recalc-warning">
+                    <p>
+                        <strong><?php esc_html_e('Notice:', 'woocommerce-combo-product'); ?></strong>
+                        <?php esc_html_e('This is a reservation order. Recalculation is disabled to preserve deposit and balance amounts.', 'woocommerce-combo-product'); ?>
+                    </p>
+                </div>
+            </td>
+        </tr>
+        <tr class="combo-reservation-total-row">
+            <td class="label"><?php esc_html_e('Items Subtotal:', 'woocommerce'); ?></td>
+            <td width="1%"></td>
+            <td class="total"><?php echo wp_kses_post(wc_price($items_subtotal, array('currency' => $order->get_currency()))); ?></td>
+        </tr>
+        <?php if ($shipping_total > 0) : ?>
+            <tr class="combo-reservation-total-row">
+                <td class="label"><?php esc_html_e('Shipping:', 'woocommerce'); ?></td>
+                <td width="1%"></td>
+                <td class="total"><?php echo wp_kses_post(wc_price($shipping_total, array('currency' => $order->get_currency()))); ?></td>
+            </tr>
+        <?php endif; ?>
+        <tr class="combo-reservation-total-row balance-row<?php echo $balance_paid ? ' paid' : ''; ?>">
+            <td class="label">
+                <?php echo $balance_paid
+                    ? esc_html__('Balance (paid):', 'woocommerce-combo-product')
+                    : esc_html__('Balance due:', 'woocommerce-combo-product'); ?>
+            </td>
+            <td width="1%"></td>
+            <td class="total balance-amount <?php echo $balance_paid ? 'paid' : 'unpaid'; ?>">
+                -<?php echo wp_kses_post(wc_price($balance_amount, array('currency' => $order->get_currency()))); ?>
+            </td>
+        </tr>
+        <tr class="combo-reservation-total-row deposit-row">
+            <td class="label"><strong><?php esc_html_e('Order Deposit:', 'woocommerce-combo-product'); ?></strong></td>
+            <td width="1%"></td>
+            <td class="total"><strong><?php echo wp_kses_post(wc_price($deposit_amount, array('currency' => $order->get_currency()))); ?></strong></td>
+        </tr>
+        <tr class="combo-reservation-total-row order-total-row">
+            <td class="label"><strong><?php esc_html_e('Order Total:', 'woocommerce'); ?></strong></td>
+            <td width="1%"></td>
+            <td class="total">
+                <strong><?php echo wp_kses_post(wc_price($balance_paid ? $original_total : $deposit_amount, array('currency' => $order->get_currency()))); ?></strong>
+            </td>
+        </tr>
+        <?php if ($balance_paid) : ?>
+            <tr class="combo-reservation-total-row paid-row">
+                <td class="label"><strong><?php esc_html_e('Paid:', 'woocommerce-combo-product'); ?></strong></td>
+                <td width="1%"></td>
+                <td class="total paid-amount"><strong><?php echo wp_kses_post(wc_price($original_total, array('currency' => $order->get_currency()))); ?></strong></td>
+            </tr>
+        <?php endif; ?>
         <?php
-        }
-    }
-
-    /**
-     * Add JavaScript to handle dynamic display changes
-     */
-    public function add_admin_order_scripts()
-    {
-        $screen = get_current_screen();
-        if ($screen && $screen->id === 'shop_order') {
-        ?>
-            <script type="text/javascript">
-                jQuery(document).ready(function($) {
-                    // Check if this is a reservation order
-                    var isReservationOrder = $('#reservation-totals-replacement').length > 0;
-
-                    if (isReservationOrder) {
-                        // Add reservation class to body for additional styling
-                        $('body').addClass('reservation-order');
-
-                        // Hide the standard order totals section
-                        $('.wc-order-totals-items').addClass('reservation-order-totals');
-
-                        // Move our custom totals to replace the standard ones
-                        var customTotals = $('#reservation-totals-replacement');
-                        if (customTotals.length) {
-                            $('.wc-order-totals-items').html(customTotals.html());
-                        }
-
-                        // Add status indicators
-                        $('.balance-amount.paid').closest('tr').addClass('paid');
-
-                        // Highlight important amounts
-                        $('.deposit-row, .paid-row').addClass('highlight-row');
-                    }
-
-                    // Handle balance status changes
-                    $(document).on('change', 'select[name="_order_status"]', function() {
-                        var status = $(this).val();
-                        if (status === 'completed' && $('.balance-amount.unpaid').length > 0) {
-                            alert('<?php echo esc_js(__('Warning: This reservation order still has an unpaid balance. Consider updating the balance status first.', 'woocommerce-combo-product')); ?>');
-                        }
-                    });
-                });
-            </script>
-<?php
-        }
     }
 
     /**

@@ -77,10 +77,17 @@ class WC_Product_Combo extends WC_Product
 {
     public $product_type;
 
-    public function __construct($product)
+    public function __construct($product = 0)
     {
         $this->product_type = 'combo';
         parent::__construct($product);
-        $this->set_catalog_visibility('visible');
+    }
+
+    /**
+     * @return string
+     */
+    public function get_type()
+    {
+        return 'combo';
     }
 }

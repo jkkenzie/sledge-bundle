@@ -96,11 +96,27 @@ final class Sledge_Bundles_Plugin
         add_action('plugins_loaded', array($this, 'init'));
         add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin'));
+        add_filter('woocommerce_product_class', array($this, 'product_class'), 10, 2);
     }
 
     public function get_license_manager()
     {
         return $this->license_manager;
+    }
+
+    /**
+     * Ensure combo products resolve to WC_Product_Combo.
+     *
+     * @param string $classname   Product class name.
+     * @param string $product_type Product type slug.
+     * @return string
+     */
+    public function product_class($classname, $product_type)
+    {
+        if ('combo' === $product_type && class_exists('WC_Product_Combo')) {
+            return 'WC_Product_Combo';
+        }
+        return $classname;
     }
 
     public function init()
@@ -115,16 +131,27 @@ final class Sledge_Bundles_Plugin
         }
 
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-core.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-templates.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-admin.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-frontend.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-cart.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-reservation.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product-orders.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-order-tracking-statuses.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-payment-callback-db.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-payment-callback-capture.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-payment-gateway-verifier.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-payment-ipay-reconciliation.php';
+        require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-payment-callback-admin.php';
         require_once SLEDGE_BUNDLES_PATH . 'includes/class-wc-combo-product.php';
+
+        WC_Combo_Payment_Callback_DB::maybe_create_table();
 
         new WC_Combo_Product_Main();
         new WC_Combo_Order_Tracking_Statuses();
+        new WC_Combo_Payment_Callback_Capture();
+        new WC_Combo_Payment_Callback_Admin();
+        new WC_Combo_Payment_Ipay_Reconciliation();
     }
 
     public function woocommerce_missing_notice()
@@ -140,28 +167,53 @@ final class Sledge_Bundles_Plugin
             return;
         }
 
+        $is_combo_single = function_exists('is_product') && is_product();
+        if ($is_combo_single) {
+            $product = wc_get_product(get_the_ID());
+            $is_combo_single = $product && $product->get_type() === 'combo';
+        }
+
+        if (!$is_combo_single && !(function_exists('is_cart') && is_cart()) && !(function_exists('is_checkout') && is_checkout())) {
+            return;
+        }
+
         wp_enqueue_style(
             'wc-combo-product',
             SLEDGE_BUNDLES_URL . 'assets/css/wc-combo-product.css',
             array(),
             SLEDGE_BUNDLES_VERSION
         );
+
+        $combo_js = 'assets/js/wc-combo-product.min.js';
+        if (!file_exists(SLEDGE_BUNDLES_PATH . $combo_js)) {
+            $combo_js = 'assets/js/wc-combo-product.js';
+        }
+
         wp_enqueue_script(
             'wc-combo-product',
-            SLEDGE_BUNDLES_URL . 'assets/js/wc-combo-product.min.js',
+            SLEDGE_BUNDLES_URL . $combo_js,
             array('jquery'),
             SLEDGE_BUNDLES_VERSION,
             true
         );
 
         $localization_data = array(
-            'ajaxUrl'            => admin_url('admin-ajax.php'),
-            'addComboToCartNonce'=> wp_create_nonce('add_combo_to_cart_nonce'),
-            'currency_symbol'    => function_exists('get_woocommerce_currency_symbol') ? get_woocommerce_currency_symbol() : '',
-            'currency_position'  => get_option('woocommerce_currency_pos'),
-            'thousand_separator' => function_exists('wc_get_price_thousand_separator') ? wc_get_price_thousand_separator() : ',',
-            'decimal_separator'  => function_exists('wc_get_price_decimal_separator') ? wc_get_price_decimal_separator() : '.',
-            'decimals'           => function_exists('wc_get_price_decimals') ? wc_get_price_decimals() : 2,
+            'ajaxUrl'             => admin_url('admin-ajax.php'),
+            'addComboToCartNonce' => wp_create_nonce('add_combo_to_cart_nonce'),
+            'currency_symbol'     => function_exists('get_woocommerce_currency_symbol') ? get_woocommerce_currency_symbol() : '',
+            'currency_position'   => get_option('woocommerce_currency_pos'),
+            'thousand_separator'  => function_exists('wc_get_price_thousand_separator') ? wc_get_price_thousand_separator() : ',',
+            'decimal_separator'   => function_exists('wc_get_price_decimal_separator') ? wc_get_price_decimal_separator() : '.',
+            'decimals'            => function_exists('wc_get_price_decimals') ? wc_get_price_decimals() : 2,
+            'i18n'                => array(
+                'removeConfirm'     => __('Remove this item from the bundle?', 'sledge-bundles'),
+                'removeRequired'    => __('This is a required item and cannot be removed.', 'sledge-bundles'),
+                'removeLast'        => __('Cannot remove the last item from the bundle.', 'sledge-bundles'),
+                'removeRequiredMin' => __('At least one required item must remain in the bundle.', 'sledge-bundles'),
+                'minQtyRequired'    => __('Required items must have a minimum quantity of 1.', 'sledge-bundles'),
+                'maxQty'            => __('Maximum quantity allowed is %s', 'sledge-bundles'),
+                'itemRemoved'       => __('Item removed. Bundle total updated.', 'sledge-bundles'),
+            ),
         );
 
         if (function_exists('is_checkout') && is_checkout()) {
@@ -184,17 +236,24 @@ final class Sledge_Bundles_Plugin
 
         global $post;
 
-        if ('post.php' !== $hook) {
-            return;
-        }
+        $is_product_editor = in_array($hook, array('post.php', 'post-new.php'), true)
+            && isset($post)
+            && 'product' === get_post_type($post);
 
-        if (!isset($post) || 'product' !== get_post_type($post->ID)) {
+        if (!$is_product_editor) {
             return;
         }
 
         wp_enqueue_script('jquery-ui-core');
         wp_enqueue_script('jquery-ui-accordion');
         wp_enqueue_script('jquery-ui-sortable');
+
+        wp_enqueue_style(
+            'combo-product-admin',
+            SLEDGE_BUNDLES_URL . 'assets/css/combo-product-admin.css',
+            array(),
+            SLEDGE_BUNDLES_VERSION
+        );
         wp_enqueue_style(
             'combo-product-select-style',
             SLEDGE_BUNDLES_URL . 'assets/css/select2.min.css',
@@ -202,18 +261,33 @@ final class Sledge_Bundles_Plugin
             SLEDGE_BUNDLES_VERSION
         );
         wp_enqueue_script(
-            'combo-product-select.js',
+            'combo-product-select',
             SLEDGE_BUNDLES_URL . 'assets/js/select2.min.js',
-            array(),
+            array('jquery'),
             SLEDGE_BUNDLES_VERSION,
             true
         );
+
+        $combo_admin_js = 'assets/js/combo-product.min.js';
+        if (!file_exists(SLEDGE_BUNDLES_PATH . $combo_admin_js)) {
+            $combo_admin_js = 'assets/js/combo-product.js';
+        }
+
         wp_enqueue_script(
             'combo-product-js',
-            SLEDGE_BUNDLES_URL . 'assets/js/combo-product.min.js',
-            array('jquery', 'jquery-ui-accordion', 'jquery-ui-sortable'),
+            SLEDGE_BUNDLES_URL . $combo_admin_js,
+            array('jquery', 'jquery-ui-accordion', 'jquery-ui-sortable', 'combo-product-select'),
             SLEDGE_BUNDLES_VERSION,
             true
+        );
+
+        wp_localize_script(
+            'combo-product-js',
+            'wc_combo_admin',
+            array(
+                'nonce' => wp_create_nonce('wc_combo_admin'),
+                'productId' => isset($post->ID) ? absint($post->ID) : 0,
+            )
         );
     }
 }
@@ -232,6 +306,13 @@ register_activation_hook(
         }
     }
 );
-register_deactivation_hook(SLEDGE_BUNDLES_FILE, array('Sledge_Bundles_License_Manager', 'unschedule'));
+
+register_deactivation_hook(
+    SLEDGE_BUNDLES_FILE,
+    function () {
+        Sledge_Bundles_License_Manager::unschedule();
+        wp_clear_scheduled_hook('wc_combo_ipay_reconciliation_cron');
+    }
+);
 
 Sledge_Bundles_Plugin::instance();
