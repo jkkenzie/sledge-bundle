@@ -183,6 +183,17 @@ final class Sledge_Bundles_License_Admin
                             <td><?php echo esc_html($status['last_error']); ?></td>
                         </tr>
                     <?php endif; ?>
+                    <?php
+                    $update_error = class_exists('Sledge_Bundles_Plugin_Updater')
+                        ? (string) get_site_option(Sledge_Bundles_Plugin_Updater::ERROR_OPTION, '')
+                        : '';
+                    if ($update_error !== '') :
+                        ?>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Last update check', 'sledge-bundles'); ?></th>
+                            <td><?php echo esc_html($update_error); ?></td>
+                        </tr>
+                    <?php endif; ?>
                     <tr>
                         <th scope="row"><?php esc_html_e('Features', 'sledge-bundles'); ?></th>
                         <td>
@@ -218,6 +229,15 @@ final class Sledge_Bundles_License_Admin
                     <?php submit_button(__('Deactivate and release domain', 'sledge-bundles'), 'secondary', 'submit', false); ?>
                 </form>
             <?php endif; ?>
+
+            <p class="description" style="max-width:760px;margin-top:16px;">
+                <?php esc_html_e('With an active license and Updates enabled, WordPress will offer new versions on Plugins → Installed Plugins (Dashboard → Updates). Bedrock sites can also require iyi/sledge-bundles from the iYi Composer repository.', 'sledge-bundles'); ?>
+                <?php if (current_user_can('update_plugins')) : ?>
+                    <a href="<?php echo esc_url(admin_url('plugins.php?force-check=1')); ?>">
+                        <?php esc_html_e('Check for plugin updates', 'sledge-bundles'); ?>
+                    </a>
+                <?php endif; ?>
+            </p>
         </div>
         <?php
     }

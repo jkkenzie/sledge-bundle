@@ -4,6 +4,7 @@ Plugin Name:       Sledge Bundles
 Description:       Create bundled / combo products in WooCommerce with optional reservation flows.
 Version:           1.0.0
 Plugin URI:        https://iyisolutions.com
+Update URI:        https://iyisolutions.com
 Author:            Sledge / iYi
 Author URI:        https://iyisolutions.com
 License:           GPLv2 or later
@@ -38,6 +39,7 @@ $sledge_bundles_license_config = require SLEDGE_BUNDLES_PATH . 'includes/license
 require_once SLEDGE_BUNDLES_PATH . 'includes/class-sledge-bundles-license-client.php';
 require_once SLEDGE_BUNDLES_PATH . 'includes/class-sledge-bundles-license-manager.php';
 require_once SLEDGE_BUNDLES_PATH . 'includes/class-sledge-bundles-license-admin.php';
+require_once SLEDGE_BUNDLES_PATH . 'includes/class-sledge-bundles-plugin-updater.php';
 
 /**
  * Plugin bootstrap: licensing + WooCommerce combo product features.
@@ -92,6 +94,10 @@ final class Sledge_Bundles_Plugin
         }
 
         new Sledge_Bundles_License_Admin($this->license_manager);
+
+        if ('premium' === $this->config['edition']) {
+            new Sledge_Bundles_Plugin_Updater($this->license_manager);
+        }
 
         add_action('plugins_loaded', array($this, 'init'));
         add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend'));

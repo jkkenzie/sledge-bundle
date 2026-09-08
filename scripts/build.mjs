@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
@@ -73,6 +74,9 @@ if (production) {
   const zipPath = path.join(outputRoot, `sledge-bundles-${pluginVersion}-${edition}.zip`);
   await createZip(zipPath);
   console.log(`Built ${edition} plugin: ${path.relative(root, zipPath)}`);
+  if (edition === 'premium') {
+    tagAndPushRelease(pluginVersion, zipPath);
+  }
 } else {
   console.log(`Built development plugin: ${path.relative(root, pluginRoot)}`);
 }
@@ -310,6 +314,204 @@ async function createZip(zipPath) {
 
 function normalize(value) {
   return value.split(path.sep).join('/');
+}
+
+/**
+ * After a premium ZIP, create or move v{version} to HEAD, push it, and publish
+ * a GitHub release so the main site can pull the package
+ * (Licenses → Packages → Sync now).
+ *
+ * Rebuilding the tracked dist zip does not block tagging. Other uncommitted
+ * source changes still skip the tag. Rebuilding the same version moves the
+ * existing tag to HEAD and force-pushes that tag only.
+ *
+ * Skip with IYI_SKIP_GIT_TAG=1. Skip the push only with IYI_SKIP_GIT_TAG_PUSH=1.
+ * Skip the GitHub release only with IYI_SKIP_GITHUB_RELEASE=1.
+ */
+function tagAndPushRelease(releaseVersion, zipPath) {
+  if (envFlag('IYI_SKIP_GIT_TAG')) {
+    console.log('Skipped git tag (IYI_SKIP_GIT_TAG).');
+    return;
+  }
+
+  if (!fsSync.existsSync(path.join(root, '.git'))) {
+    console.warn('Skipped git tag: this is not a git checkout.');
+    return;
+  }
+
+  const tag = `v${releaseVersion}`;
+  console.log(`Release tag target: ${tag}`);
+  const dirty = uncommittedSourcePaths();
+  if (dirty.length) {
+    console.warn(`Skipped git tag ${tag}: commit (or stash) local changes first.`);
+    for (const file of dirty) {
+      console.warn(`  dirty: ${file}`);
+    }
+    return;
+  }
+
+  const tagState = ensureReleaseTag(tag, releaseVersion);
+  if (!tagState.ok) {
+    return;
+  }
+
+  if (envFlag('IYI_SKIP_GIT_TAG_PUSH')) {
+    console.log('Skipped pushing git tag (IYI_SKIP_GIT_TAG_PUSH).');
+    return;
+  }
+
+  const remote = git(['remote'], { ignoreError: true });
+  if (!remote || !remote.stdout.split(/\s+/).includes('origin')) {
+    console.warn(`Created ${tag} locally; no origin remote to push.`);
+    return;
+  }
+
+  const pushArgs = tagState.moved ? ['push', '--force', 'origin', `refs/tags/${tag}`] : ['push', 'origin', tag];
+  const pushed = git(pushArgs);
+  if (!pushed || pushed.status !== 0) {
+    const hint = tagState.moved ? `git push --force origin ${tag}` : `git push origin ${tag}`;
+    console.warn(`Created ${tag} locally but could not push it. Run: ${hint}`);
+    return;
+  }
+  console.log(tagState.moved ? `Updated and pushed git tag ${tag} to origin.` : `Pushed git tag ${tag} to origin.`);
+
+  createGitHubRelease(tag, releaseVersion, zipPath, tagState.moved);
+}
+
+function ensureReleaseTag(tag, releaseVersion) {
+  const message = `Sledge Bundles ${releaseVersion}`;
+  const existing = git(['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { ignoreError: true });
+  if (existing && existing.status === 0) {
+    const tagged = git(['rev-parse', `${tag}^{commit}`]);
+    const head = git(['rev-parse', 'HEAD']);
+    if (tagged && head && tagged.stdout.trim() === head.stdout.trim()) {
+      console.log(`Git tag ${tag} already points at HEAD.`);
+      return { ok: true, moved: false };
+    }
+
+    const deleted = git(['tag', '-d', tag]);
+    if (!deleted || deleted.status !== 0) {
+      console.warn(`Could not move git tag ${tag}.`);
+      return { ok: false, moved: false };
+    }
+
+    const created = git(['tag', '-a', tag, '-m', message]);
+    if (!created || created.status !== 0) {
+      console.warn(`Could not create git tag ${tag}.`);
+      return { ok: false, moved: false };
+    }
+
+    console.log(`Updated git tag ${tag} to HEAD.`);
+    return { ok: true, moved: true };
+  }
+
+  const created = git(['tag', '-a', tag, '-m', message]);
+  if (!created || created.status !== 0) {
+    console.warn(`Could not create git tag ${tag}.`);
+    return { ok: false, moved: false };
+  }
+
+  console.log(`Created git tag ${tag}.`);
+  return { ok: true, moved: false };
+}
+
+function workingTreeHasUncommittedSource() {
+  return uncommittedSourcePaths().length > 0;
+}
+
+function uncommittedSourcePaths() {
+  const status = git(['status', '--porcelain']);
+  if (status === null) {
+    return ['(git status failed)'];
+  }
+
+  const dirty = [];
+  for (const raw of status.stdout.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const paths = porcelainPaths(line);
+    if (paths.some((file) => !isTrackedDistZip(file))) {
+      dirty.push(paths.join(' -> ') || line);
+    }
+  }
+  return dirty;
+}
+
+function porcelainPaths(line) {
+  const rest = line.replace(/^(?:[ MADRCU?!]{1,2})\s+/, '').replace(/^"+|"+$/g, '');
+  return rest
+    .split(/\s+->\s+/)
+    .map((file) => file.replace(/^"+|"+$/g, '').replace(/\\/g, '/'))
+    .filter(Boolean);
+}
+
+function isTrackedDistZip(file) {
+  return /^dist\/[^/]+\.zip$/.test(file);
+}
+
+function createGitHubRelease(tag, releaseVersion, zipPath, replaced = false) {
+  if (envFlag('IYI_SKIP_GITHUB_RELEASE')) {
+    console.log('Skipped GitHub release (IYI_SKIP_GITHUB_RELEASE).');
+    return;
+  }
+
+  const viewed = gh(['release', 'view', tag], { ignoreError: true });
+  if (viewed && viewed.status === 0) {
+    if (!replaced) {
+      console.log(`GitHub release ${tag} already exists.`);
+      return;
+    }
+
+    const removed = gh(['release', 'delete', tag, '--yes'], { ignoreError: true });
+    if (!removed || removed.status !== 0) {
+      console.warn(`Updated ${tag} but could not replace GitHub release ${tag}.`);
+      return;
+    }
+  }
+
+  const args = ['release', 'create', tag, '--title', `Sledge Bundles ${releaseVersion}`, '--notes', `Sledge Bundles ${releaseVersion}`];
+  if (zipPath && fsSync.existsSync(zipPath)) {
+    args.push(zipPath);
+  }
+
+  const created = gh(args);
+  if (!created || created.status !== 0) {
+    console.warn(`Pushed ${tag} but could not create a GitHub release. Run: gh release create ${tag}`);
+    return;
+  }
+
+  console.log(replaced ? `Updated GitHub release ${tag}.` : `Created GitHub release ${tag}.`);
+}
+
+function envFlag(name) {
+  const value = String(process.env[name] || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function git(args, { ignoreError = false } = {}) {
+  return runCommand('git', args, { ignoreError });
+}
+
+function gh(args, { ignoreError = false } = {}) {
+  return runCommand('gh', args, { ignoreError });
+}
+
+function runCommand(command, args, { ignoreError = false } = {}) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true
+  });
+  if (result.error) {
+    console.warn(`${command} ${args.join(' ')}: ${result.error.message}`);
+    return null;
+  }
+  if (result.status !== 0 && !ignoreError) {
+    const detail = (result.stderr || result.stdout || '').trim();
+    console.warn(`${command} ${args.join(' ')} failed${detail ? `: ${detail}` : '.'}`);
+    return null;
+  }
+  return result;
 }
 
 function loadDotEnv(file) {

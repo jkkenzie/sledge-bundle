@@ -70,6 +70,7 @@ final class Sledge_Bundles_License_Manager
         update_option(self::KEY_OPTION, $license_key, false);
         $this->store_valid_state($result);
         self::schedule();
+        self::bust_plugin_update_cache();
 
         return true;
     }
@@ -102,6 +103,7 @@ final class Sledge_Bundles_License_Manager
         }
 
         $this->store_valid_state($result);
+        self::bust_plugin_update_cache();
         return true;
     }
 
@@ -120,6 +122,7 @@ final class Sledge_Bundles_License_Manager
         }
 
         $this->clear();
+        self::bust_plugin_update_cache();
         return true;
     }
 
@@ -127,6 +130,13 @@ final class Sledge_Bundles_License_Manager
     {
         delete_option(self::KEY_OPTION);
         delete_option(self::STATE_OPTION);
+        self::bust_plugin_update_cache();
+    }
+
+    public static function bust_plugin_update_cache()
+    {
+        delete_site_transient('update_plugins');
+        do_action('sledge_bundles_flush_plugin_update_cache');
     }
 
     /**
@@ -212,6 +222,21 @@ final class Sledge_Bundles_License_Manager
         $host = wp_parse_url(home_url('/'), PHP_URL_HOST);
         $host = strtolower(rtrim((string) $host, '.'));
         return preg_replace('/^www\./i', '', $host);
+    }
+
+    public function get_stored_license_key()
+    {
+        return $this->get_license_key();
+    }
+
+    public function get_client()
+    {
+        return $this->client;
+    }
+
+    public function get_plugin_slug()
+    {
+        return isset($this->config['plugin']) ? (string) $this->config['plugin'] : 'sledge-bundles';
     }
 
     private function remote_check($license_key, $action)

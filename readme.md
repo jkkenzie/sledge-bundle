@@ -30,6 +30,7 @@ sledge-bundles/
 ├── css/                    License admin styles
 ├── includes/
 │   ├── class-sledge-bundles-license-*.php
+│   ├── class-sledge-bundles-plugin-updater.php
 │   ├── class-wc-combo-*.php
 │   ├── class-wc-combo-product-templates.php  Theme override locator
 │   └── license-config.php  Dev stub (builds overwrite this)
@@ -131,6 +132,107 @@ npm run build
 Premium builds embed the RSA public key and license endpoint. Env vars
 `SLEDGE_BUNDLES_LICENSE_*` are preferred; `IYI_LICENSE_*` works as a fallback
 so you can reuse the same `.env` as iyi-elements.
+
+### Version tags (`npm run build` / `build:premium`)
+
+A successful **premium** build (`npm run build` / `npm run build:premium`) reads
+`version` from `package.json` (not from the last git tag). It then tags `HEAD`
+as `v{version}` (for example `1.0.0` → `v1.0.0`), pushes that tag to `origin`,
+and publishes a GitHub release with the zip. The iYi main site uses that tag
+for **Licenses → Packages → Sync now**. Free builds (`npm run build:free`) do
+not tag. `npm run build` runs free then premium; tagging runs when the
+premium zip is created.
+
+**Commit first, then build.** If `package.json` or `sledge-bundles.php` is
+still dirty, the zip is still written, but tagging is skipped (the previous
+tag is left unchanged). Rewriting only `dist/*.zip` is allowed and does not
+block tagging. Also unset `IYI_SKIP_GIT_TAG` in the shell if a previous
+session set it.
+
+New version (creates `v1.0.1`, leaves `v1.0.0` in place):
+
+```sh
+# 1. Set version in package.json AND both places in sledge-bundles.php
+#    (plugin header `Version:` and SLEDGE_BUNDLES_VERSION)
+git add package.json sledge-bundles.php
+git commit -m "Release version 1.0.1"
+npm run build          # writes dist/sledge-bundles-1.0.1-premium.zip
+                       # creates and pushes git tag v1.0.1
+```
+
+Same version rebuilt (moves `v1.0.0` to the new `HEAD` and force-pushes that
+tag only — not `main`):
+
+```sh
+git commit ...         # source changes
+npm run build          # retags v1.0.0 onto HEAD
+```
+
+How tagging works:
+
+1. Commit (or stash) source changes first. A dirty working tree skips the tag
+   and prints the dirty paths.
+2. If `v{version}` does not exist, the build creates an annotated tag on `HEAD`
+   and runs `git push origin v{version}`.
+3. If `v{version}` already points at `HEAD`, the build leaves it in place and
+   pushes it if needed.
+4. If `v{version}` exists on an **older commit** (same version rebuilt), the
+   build deletes the local tag, recreates it on `HEAD`, and force-pushes **that
+   tag only** (`git push --force origin refs/tags/v{version}`). It does not
+   force-push `main`.
+5. When the tag moves, an existing GitHub release with the same name is replaced
+   so the zip on the release matches `HEAD`.
+
+`gh` must be installed and authenticated for the GitHub release step. The zip
+is still built if tagging is skipped.
+
+Skip flags (in `.env` or the environment):
+
+| Flag | Effect |
+| --- | --- |
+| `IYI_SKIP_GIT_TAG=1` | Do not create, move, or push the tag |
+| `IYI_SKIP_GIT_TAG_PUSH=1` | Create or move the tag locally only |
+| `IYI_SKIP_GITHUB_RELEASE=1` | Push the tag but do not create/update the GitHub release |
+
+## Updates
+
+Premium installs check the iYi license server (same host as license validation:
+`https://iyisolutions.com`). The store product **plugin slug** must be
+`sledge-bundles`, **Updates** must be on for the license, and **Licenses →
+Packages** must list the ZIP after **Sync now** (git tag `v{version}`).
+
+### WordPress Plugins screen
+
+1. Activate the license under **Settings → Sledge Bundles License**.
+2. Confirm the key is active on this site’s public host (no `www.`).
+3. Open **Plugins → Installed Plugins** or **Dashboard → Updates**.
+4. If an update does not appear yet, use **Check for plugin updates** on the
+   Sledge Bundles License screen, or open Plugins with `?force-check=1`.
+
+The plugin calls `/wp-json/iyi/v1/licenses/update-check` (the pretty URL
+`/api/licenses/update-check` is used only as a fallback). If a newer package
+exists, an update row appears for Sledge Bundles. **Update now** downloads
+`/api/licenses/package` (or the REST package route) with a short-lived token;
+the plugin refreshes that token immediately before the download so it does
+not expire.
+
+After a successful update, the Plugins screen should not keep offering the
+version that was just installed. The check uses the plugin header on disk
+(not the in-memory previous version) and clears the WordPress update cache
+when this plugin finishes upgrading. If a check fails, Plugins and Sledge
+Bundles License show the error instead of a silent “no update.”
+
+If the Plugins screen shows a warning that updates are not allowed, enable
+**Updates** on that license in the iYi admin (or use a plan that includes
+updates). Development and free builds (`edition` `development` / `free`) do
+not call the update API.
+
+### Composer updates (Bedrock)
+
+On a Bedrock (or other Composer-managed) WordPress site, install and update
+this plugin from the iYi Composer repository instead of uploading a ZIP.
+
+Package name: `iyi/sledge-bundles` (`type: wordpress-plugin`).
 
 ## Deploy to the Sledge site
 
