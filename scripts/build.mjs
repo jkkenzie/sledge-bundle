@@ -490,11 +490,9 @@ function createGitHubRelease(tag, releaseVersion, zipPath, replaced = false) {
   console.log(replaced ? `Updated GitHub release ${tag}.` : `Created GitHub release ${tag}.`);
 }
 
-let ghInstalled = null;
-
 function hasGh() {
-  if (ghInstalled !== null) {
-    return ghInstalled;
+  if (typeof hasGh.installed === 'boolean') {
+    return hasGh.installed;
   }
 
   const result = spawnSync('gh', ['--version'], {
@@ -502,8 +500,8 @@ function hasGh() {
     encoding: 'utf8',
     windowsHide: true
   });
-  ghInstalled = !result.error;
-  return ghInstalled;
+  hasGh.installed = !result.error;
+  return hasGh.installed;
 }
 
 function envFlag(name) {
