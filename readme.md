@@ -137,11 +137,11 @@ so you can reuse the same `.env` as iyi-elements.
 
 A successful **premium** build (`npm run build` / `npm run build:premium`) reads
 `version` from `package.json` (not from the last git tag). It then tags `HEAD`
-as `v{version}` (for example `1.0.0` → `v1.0.0`), pushes that tag to `origin`,
-and publishes a GitHub release with the zip. The iYi main site uses that tag
-for **Licenses → Packages → Sync now**. Free builds (`npm run build:free`) do
-not tag. `npm run build` runs free then premium; tagging runs when the
-premium zip is created.
+as `v{version}` (for example `1.0.0` → `v1.0.0`) and pushes that tag to
+`origin`. The iYi main site uses that tag for **Licenses → Packages → Sync now**.
+A GitHub release is created only if the GitHub CLI (`gh`) is installed.
+Free builds (`npm run build:free`) do not tag. `npm run build` runs free then
+premium; tagging runs when the premium zip is created.
 
 **Commit first, then build.** If `package.json` or `sledge-bundles.php` is
 still dirty, the zip is still written, but tagging is skipped (the previous
@@ -183,8 +183,9 @@ How tagging works:
 5. When the tag moves, an existing GitHub release with the same name is replaced
    so the zip on the release matches `HEAD`.
 
-`gh` must be installed and authenticated for the GitHub release step. The zip
-is still built if tagging is skipped.
+The iYi store uses the **git tag**, not a GitHub release. GitHub CLI (`gh`) is
+optional: if it is missing, the build skips that step and still succeeds. The
+zip is still built if tagging is skipped.
 
 Skip flags (in `.env` or the environment):
 

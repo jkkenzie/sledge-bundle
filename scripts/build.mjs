@@ -455,6 +455,13 @@ function createGitHubRelease(tag, releaseVersion, zipPath, replaced = false) {
     return;
   }
 
+  if (!hasGh()) {
+    console.log(
+      'Skipped GitHub release: GitHub CLI (gh) is not installed. The git tag is enough for Licenses → Packages → Sync now.'
+    );
+    return;
+  }
+
   const viewed = gh(['release', 'view', tag], { ignoreError: true });
   if (viewed && viewed.status === 0) {
     if (!replaced) {
@@ -481,6 +488,22 @@ function createGitHubRelease(tag, releaseVersion, zipPath, replaced = false) {
   }
 
   console.log(replaced ? `Updated GitHub release ${tag}.` : `Created GitHub release ${tag}.`);
+}
+
+let ghInstalled = null;
+
+function hasGh() {
+  if (ghInstalled !== null) {
+    return ghInstalled;
+  }
+
+  const result = spawnSync('gh', ['--version'], {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true
+  });
+  ghInstalled = !result.error;
+  return ghInstalled;
 }
 
 function envFlag(name) {
